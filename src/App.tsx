@@ -10,14 +10,13 @@ import Tasks from "./pages/dashboard/project-view/tasks";
 import Board from "./pages/dashboard/project-view/board";
 import { Calendar } from "lucide-react";
 import Task from "./pages/dashboard/project-view/task";
-import Profile from "./pages/profile";
+import Profile from "./pages/dashboard/profile";
 
 const App = () => {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="login" element={<Login />} />
-        <Route path="profile" element={<Profile />} />
 
         <Route path="dashboard" element={<DashboardLayout />}>
           <Route path="projects" element={<Projects />}>
@@ -31,6 +30,7 @@ const App = () => {
 
               <Route path="calendar" element={<Calendar />} />
             </Route>
+            <Route path="profile" element={<Profile />} />
           </Route>
 
           <Route path="users" element={<Users />}>
