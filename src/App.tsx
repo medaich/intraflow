@@ -1,16 +1,16 @@
 import { BrowserRouter, Route, Routes } from "react-router";
-import Login from "./pages/login";
 import DashboardLayout from "./pages/dashboard/dashboard-layout";
-import Projects from "./pages/dashboard/projects";
-import Users from "./pages/dashboard/users";
-import User from "./pages/dashboard/user";
+import Profile from "./pages/dashboard/profile";
+import Board from "./pages/dashboard/project-view/board";
+import Calendar from "./pages/dashboard/project-view/calendar";
 import ProjectLayout from "./pages/dashboard/project-view/project-layout";
 import Stats from "./pages/dashboard/project-view/stats";
-import Tasks from "./pages/dashboard/project-view/tasks";
-import Board from "./pages/dashboard/project-view/board";
-import { Calendar } from "lucide-react";
 import Task from "./pages/dashboard/project-view/task";
-import Profile from "./pages/dashboard/profile";
+import Tasks from "./pages/dashboard/project-view/tasks";
+import Projects from "./pages/dashboard/projects";
+import User from "./pages/dashboard/user";
+import Users from "./pages/dashboard/users";
+import Login from "./pages/login";
 
 const App = () => {
   return (
