@@ -23,6 +23,7 @@ const App = () => {
           <Route path="dashboard" element={<DashboardLayout />}>
             <Route path="projects" element={<Projects />}>
               <Route path=":projId" element={<ProjectLayout />}>
+                {/* Tasks per project */}
                 <Route path="stats" element={<Stats />} />
                 <Route path="board" element={<Board />} />
 
@@ -32,9 +33,19 @@ const App = () => {
 
                 <Route path="calendar" element={<Calendar />} />
               </Route>
-              <Route path="profile" element={<Profile />} />
             </Route>
 
+            {/* All tasks */}
+            <Route path="stats" element={<Stats />} />
+            <Route path="board" element={<Board />} />
+
+            <Route path="tasks" element={<Tasks />}>
+              <Route path=":taskId" element={<Task />} />
+            </Route>
+
+            <Route path="calendar" element={<Calendar />} />
+
+            <Route path="profile" element={<Profile />} />
             <Route path="users" element={<Users />}>
               <Route path=":userId" element={<User />} />
             </Route>
