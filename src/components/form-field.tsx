@@ -1,66 +1,53 @@
 import { InfoIcon } from "lucide-react";
 import { Input } from "./ui/input";
-import type { InputErrors } from "@/pages/login";
 
-interface FormFieldTypes {
+interface FormFieldProps {
   name: string;
-  type: string;
+  type?: string;
   placeholder?: string;
-  val: string;
-  setVal: React.Dispatch<React.SetStateAction<string>>;
-  isLoad: boolean;
-  validate?: {
-    key: keyof InputErrors;
-    validateRegex: RegExp;
-    inputErrs: InputErrors;
-    setInputErrs: React.Dispatch<React.SetStateAction<InputErrors>>;
-    message: string;
-  };
+  value: string;
+  onChange: (val: string) => void;
+  isLoading?: boolean;
+  error?: string;
+  required?: boolean;
 }
 
 const FormField = ({
   name,
-  type,
+  type = "text",
   placeholder,
-  val,
-  setVal,
-  isLoad,
-  validate,
-}: FormFieldTypes) => {
-  const isValid = !validate || !validate.inputErrs[validate.key]; // either no validation or no associated errors
-
-  const onValidate = () => {
-    if (!validate) return;
-    validate.setInputErrs((errs) => ({
-      ...errs,
-      [validate.key]: !validate.validateRegex.test(val),
-    }));
-  };
+  value,
+  onChange,
+  isLoading = false,
+  error,
+  required = false,
+}: FormFieldProps) => {
   return (
-    <label htmlFor="email" className="space-y-4">
-      <p className="font-semibold capitalize">{name}</p>
+    <div className="space-y-2">
+      <label
+        htmlFor={name}
+        className="text-sm font-medium capitalize text-foreground block"
+      >
+        {name} {required && <span className="text-destructive">*</span>}
+      </label>
 
-      <div className="space-y-2">
-        <Input
-          type={type}
-          aria-invalid={validate && validate.inputErrs[validate.key]}
-          placeholder={placeholder}
-          value={val}
-          onChange={(e) => setVal(e.target.value)}
-          onBlur={onValidate}
-          id={name}
-          name={name}
-          required
-          disabled={isLoad}
-        />
-        {!isValid && (
-          <p className="bg-destructive/10 p-2 text-destructive rounded text-sm flex gap-2 items-center">
-            <InfoIcon />
-            {validate.message}
-          </p>
-        )}
-      </div>
-    </label>
+      <Input
+        type={type}
+        id={name}
+        name={name}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        required={required}
+        disabled={isLoading}
+      />
+      {error && (
+        <p className="bg-destructive/10 p-2 text-destructive rounded text-xs flex gap-2 items-center">
+          <InfoIcon className="size-4 shrink-0" />
+          {error}
+        </p>
+      )}
+    </div>
   );
 };
 

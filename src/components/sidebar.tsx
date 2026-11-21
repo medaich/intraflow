@@ -11,11 +11,17 @@ import {
   PanelRightOpen,
   Settings,
   SquareKanban,
-  User,
   Users,
+  Shield,
+  Plus,
 } from "lucide-react";
 import CollabNLogo from "./collap-n-logo";
 import SidebarNavLink from "./sidebar-nav-link";
+import { useAuth } from "@/contexts/AuthContext";
+import { useQuery } from "@tanstack/react-query";
+import { apiClient } from "@/lib/api-client";
+import type { PaginatedResponse, Project } from "@/types";
+import { Link } from "react-router";
 
 interface SidebarProps {
   className?: string;
@@ -23,13 +29,30 @@ interface SidebarProps {
 
 const Sidebar = ({ className }: SidebarProps) => {
   const { isOpen, close, resize, size } = useSidebar();
-  if (!isOpen) return;
+  const { user } = useAuth();
+
+  // Dynamically load projects visible to this user
+  const { data: projectsData } = useQuery({
+    queryKey: ["projects", { limit: 8 }],
+    queryFn: async () => {
+      const res = await apiClient.get<PaginatedResponse<Project>>("/projects", {
+        params: { limit: 8 },
+      });
+      return res.data;
+    },
+    enabled: !!user,
+  });
+
+  const projects = projectsData?.data || [];
+
+  if (!isOpen) return null;
 
   function onMouseMove(e: MouseEvent) {
     const x = e.clientX;
     if (x < MIN_SIDEBAR_SIZE || x > MAX_SIDEBAR_SIZE) return;
     resize(e.clientX);
   }
+
   function onMouseUp() {
     document.removeEventListener("mousemove", onMouseMove);
     document.removeEventListener("mouseup", onMouseUp);
@@ -37,88 +60,121 @@ const Sidebar = ({ className }: SidebarProps) => {
 
   function onMouseDown(e: React.MouseEvent) {
     if (e.button !== 0) return;
-
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
-
     e.preventDefault();
   }
 
   return (
     <div
-      className={cn("flex bg-sidebar relative", className)}
+      className={cn("flex bg-sidebar border-r border-border relative select-none", className)}
       style={{ width: `${size}px` }}
     >
-      <div className="flex-1 flex flex-col">
-        <div className="h-16 flex items-center border-b-2 border-accent px-4">
+      <div className="flex-1 flex flex-col h-screen overflow-y-auto">
+        <div className="h-16 flex items-center border-b-2 border-accent px-4 shrink-0">
           <CollabNLogo Icon={PanelRightOpen} show={isOpen} onClick={close} />
         </div>
-        <nav className="flex-1 p-4 flex flex-col justify-between ">
-          <div className="flex gap-8 flex-col">
-            <ul className="space-y-2">
-              <p className="text-xs px-2">Home</p>
+        <nav className="flex-1 p-3 flex flex-col justify-between space-y-4">
+          <div className="flex gap-6 flex-col">
+            {/* Overview */}
+            <ul className="space-y-1">
+              <p className="text-[11px] font-semibold text-muted-foreground uppercase px-2 mb-1 tracking-wider">
+                Overview
+              </p>
               <SidebarNavLink to="/dashboard">
-                <LayoutDashboard className="!size-4" /> Dashboard
-              </SidebarNavLink>
-            </ul>
-            <ul className="space-y-2">
-              <p className="text-xs px-2">Workflow</p>
-
-              <SidebarNavLink to="board">
-                <SquareKanban className="!size-4" /> Board
-              </SidebarNavLink>
-              <SidebarNavLink to="tasks">
-                <ListTodo className="!size-4" /> Tasks
+                <LayoutDashboard className="size-4" /> Dashboard
               </SidebarNavLink>
             </ul>
 
-            <ul className="space-y-2">
-              <p className="text-xs px-2">Projects</p>
-              <SidebarNavLink to="projects">
-                <Folders className="!size-4" /> Projects
+            {/* Workflow */}
+            <ul className="space-y-1">
+              <p className="text-[11px] font-semibold text-muted-foreground uppercase px-2 mb-1 tracking-wider">
+                Workflow
+              </p>
+              <SidebarNavLink to="/dashboard/board">
+                <SquareKanban className="size-4" /> Kanban Board
               </SidebarNavLink>
-
-              <SidebarNavLink to="projects/1">
-                <FolderKanban className="!size-4" />
-                Project #1
-              </SidebarNavLink>
-
-              <SidebarNavLink to="projects/2">
-                <FolderKanban className="!size-4" /> Project #2
+              <SidebarNavLink to="/dashboard/tasks">
+                <ListTodo className="size-4" /> {user?.role === "ADMIN" ? "All Tasks" : "My Tasks"}
               </SidebarNavLink>
             </ul>
 
-            <ul className="space-y-2">
-              <p className="text-xs px-2">Tracking</p>
-              <SidebarNavLink to="stats">
-                <ChartColumnIncreasing className="!size-4" /> Stats
+            {/* Projects */}
+            <ul className="space-y-1">
+              <div className="flex items-center justify-between px-2 mb-1">
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                  Projects
+                </p>
+                <Link
+                  to="/dashboard/projects"
+                  className="text-xs text-primary hover:underline flex items-center gap-0.5"
+                  title="View all projects"
+                >
+                  <Plus className="size-3" />
+                </Link>
+              </div>
+              <SidebarNavLink to="/dashboard/projects">
+                <Folders className="size-4" /> All Projects
               </SidebarNavLink>
+              {projects.map((proj) => (
+                <SidebarNavLink
+                  key={proj.projectId}
+                  to={`/dashboard/projects/${proj.projectId}/board`}
+                >
+                  <FolderKanban className="size-4" />
+                  <span className="truncate">{proj.name}</span>
+                </SidebarNavLink>
+              ))}
+            </ul>
 
-              <SidebarNavLink to="calendar">
-                <Calendar className="!size-4" /> Calendar
+            {/* Analytics */}
+            <ul className="space-y-1">
+              <p className="text-[11px] font-semibold text-muted-foreground uppercase px-2 mb-1 tracking-wider">
+                Tracking
+              </p>
+              <SidebarNavLink to="/dashboard/stats">
+                <ChartColumnIncreasing className="size-4" /> Analytics & Stats
+              </SidebarNavLink>
+              <SidebarNavLink to="/dashboard/calendar">
+                <Calendar className="size-4" /> Schedule Calendar
               </SidebarNavLink>
             </ul>
 
-            <ul className="space-y-2">
-              <p className="text-xs px-2">Manage</p>
-              <SidebarNavLink to="profile">
-                <User className="!size-4" /> Profile
-              </SidebarNavLink>
-
-              <SidebarNavLink to="users">
-                <Users className="!size-4" /> Users
-              </SidebarNavLink>
+            {/* Teams Management */}
+            <ul className="space-y-1">
+              <p className="text-[11px] font-semibold text-muted-foreground uppercase px-2 mb-1 tracking-wider">
+                Organization
+              </p>
+              {user?.role === "ADMIN" && (
+                <SidebarNavLink to="/dashboard/teams">
+                  <Shield className="size-4" /> Manage Teams
+                </SidebarNavLink>
+              )}
+              {user?.membership?.teamId && (
+                <SidebarNavLink to="/dashboard/my-team">
+                  <Users className="size-4" /> My Team Roster
+                </SidebarNavLink>
+              )}
+              {user?.role === "ADMIN" && (
+                <SidebarNavLink to="/dashboard/users">
+                  <Users className="size-4" /> All Users
+                </SidebarNavLink>
+              )}
             </ul>
           </div>
-          <ul>
-            <SidebarNavLink to="settings">
-              <Settings className="!size-4" /> Settings
+
+          {/* Account Settings */}
+          <ul className="pt-2 border-t border-border">
+            <SidebarNavLink to="/dashboard/profile">
+              <Settings className="size-4" /> Account Settings
             </SidebarNavLink>
           </ul>
         </nav>
       </div>
+
+      {/* Resize Drag Handle */}
       <div
-        className="h-full absolute w-4 -right-2 cursor-e-resize group flex justify-center"
+        className="h-full absolute w-3 -right-1.5 cursor-col-resize group flex justify-center z-20"
         onMouseDown={onMouseDown}
       >
         <div className="h-full w-0.5 group-hover:bg-primary transition-colors" />
