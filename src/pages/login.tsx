@@ -1,145 +1,207 @@
-import FormField from "@/components/form-field";
-import { Button } from "@/components/ui/button";
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate, useLocation, Link } from "react-router";
 import { toast } from "sonner";
-import { emailReg, pwReg, errorMessages } from "@/lib/consts";
-
-export interface InputErrors {
-  email: boolean;
-  password: boolean;
-}
-
-const inputErrorsDefault = {
-  email: false,
-  password: false,
-};
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useAuth } from "@/contexts/AuthContext";
+import { emailReg, errorMessages } from "@/lib/consts";
+import { KeyRound, Mail, Loader2, ArrowRight } from "lucide-react";
 
 const Login = () => {
-  const API_URL = import.meta.env.VITE_API_URL;
-
   const navigate = useNavigate();
+  const location = useLocation();
+  const { login, isAuthenticated } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [user, setUser] = useState(null);
+  const [emailError, setEmailError] = useState("");
 
-  const [inputErrors, setInputErrors] =
-    useState<InputErrors>(inputErrorsDefault);
+  const fromLocation = (location.state as { from?: { pathname: string } })?.from?.pathname || "/dashboard";
 
-  const handleReset = () => {
-    setEmail("");
-    setPassword("");
-    setInputErrors(inputErrorsDefault);
+  // Redirect if already authenticated
+  if (isAuthenticated) {
+    navigate(fromLocation, { replace: true });
+  }
 
-    navigate(-1);
+  const validateEmail = (val: string) => {
+    if (!val) {
+      setEmailError("Email is required");
+      return false;
+    }
+    if (!emailReg.test(val)) {
+      setEmailError(errorMessages.email);
+      return false;
+    }
+    setEmailError("");
+    return true;
   };
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (inputErrors.email || inputErrors.password) return;
+    if (!validateEmail(email)) return;
+    if (!password) {
+      toast.error("Password Required", {
+        description: "Please enter your account password.",
+      });
+      return;
+    }
+
     try {
       setIsLoading(true);
-      const res = await fetch(`${API_URL}/auth/signin`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email,
-          password,
-        }),
+      await login(email, password);
+      toast.success("Welcome back!", {
+        description: "Successfully signed in to Intraflow.",
       });
-
-      if (!res.ok) throw new Error(res.status.toString());
-
-      const data = await res.json();
-      setUser(data);
-    } catch (error: unknown) {
-      if (error instanceof Error) {
-        let userErr: string;
-        const httpStatus = Number(error.message);
-        switch (httpStatus) {
-          case 400:
-          case 404:
-            userErr =
-              "Invalid email or password. Double-check your credentials.";
-            break;
-          case 500:
-            userErr =
-              "Something went wrong on our end. Please try again shortly.";
-            break;
-          default:
-            userErr =
-              "An unexpected error occurred. Please check your internet and try again.";
-        }
-        toast.error(userErr.split(".")[0], {
-          description: userErr.split(".")[1]?.trim(),
-        });
-        console.error("Failed to login with status: ");
-      }
-
-      console.error(error);
+      navigate(fromLocation, { replace: true });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Invalid email or password.";
+      toast.error("Sign In Failed", {
+        description: msg,
+      });
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handleDemoLogin = (demoEmail: string, demoPass: string) => {
+    setEmail(demoEmail);
+    setPassword(demoPass);
+    setEmailError("");
+  };
+
   return (
-    <main className="flex justify-center items-center w-screen h-screen">
-      <form
-        onSubmit={handleSubmit}
-        onReset={handleReset}
-        className="shadow p-8 space-y-12 w-full max-w-xl m-4 sm:m-8"
-      >
-        <div className="space-y-8 *:block">
-          <FormField
-            type="email"
-            name="email"
-            placeholder="e.g. sarah@example.com"
-            val={email}
-            setVal={setEmail}
-            isLoad={isLoading}
-            validate={{
-              validateRegex: emailReg,
-              key: "email",
-              inputErrs: inputErrors,
-              message: errorMessages.email,
-              setInputErrs: setInputErrors,
-            }}
-          />
-          <FormField
-            type="password"
-            name="password"
-            placeholder="Enter your password"
-            val={password}
-            setVal={setPassword}
-            isLoad={isLoading}
-            validate={{
-              validateRegex: pwReg,
-              key: "password",
-              inputErrs: inputErrors,
-              message: errorMessages.password,
-              setInputErrs: setInputErrors,
-            }}
-          />
+    <main className="flex min-h-screen w-screen items-center justify-center p-4 bg-background">
+      <div className="w-full max-w-md space-y-8 rounded-xl border border-border bg-card p-8 shadow-sm">
+        {/* Brand Header */}
+        <div className="text-center space-y-2">
+          <div className="inline-flex size-12 items-center justify-center rounded-xl bg-primary/10 text-primary mb-2 font-bold text-xl tracking-wider">
+            IF
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            Sign in to Intraflow
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Enter your credentials to access your workspace
+          </p>
         </div>
 
-        <div className="!flex items-center justify-end gap-2">
-          <Button type="reset" variant={"ghost"}>
-            Cancel
-          </Button>
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div className="space-y-2">
+            <label
+              htmlFor="email"
+              className="text-sm font-medium text-foreground block"
+            >
+              Email Address
+            </label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
+              <Input
+                id="email"
+                type="email"
+                placeholder="name@example.com"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (emailError) validateEmail(e.target.value);
+                }}
+                onBlur={(e) => validateEmail(e.target.value)}
+                disabled={isLoading}
+                className="pl-9"
+                required
+              />
+            </div>
+            {emailError && (
+              <p className="text-xs text-destructive">{emailError}</p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label
+                htmlFor="password"
+                className="text-sm font-medium text-foreground block"
+              >
+                Password
+              </label>
+              <Link
+                to="/forgot-password"
+                className="text-xs text-primary hover:underline font-medium"
+              >
+                Forgot password?
+              </Link>
+            </div>
+            <div className="relative">
+              <KeyRound className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
+              <Input
+                id="password"
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                disabled={isLoading}
+                className="pl-9"
+                required
+              />
+            </div>
+          </div>
+
           <Button
-            className=""
             type="submit"
+            className="w-full gap-2 cursor-pointer"
             disabled={isLoading}
-            variant={"default"}
           >
-            Login
+            {isLoading ? (
+              <>
+                <Loader2 className="size-4 animate-spin" />
+                Signing in...
+              </>
+            ) : (
+              <>
+                Sign in
+                <ArrowRight className="size-4" />
+              </>
+            )}
           </Button>
+        </form>
+
+        {/* Demo Credentials Helper */}
+        <div className="pt-4 border-t border-border">
+          <p className="text-xs text-muted-foreground font-medium mb-2.5">
+            Quick fill demo accounts:
+          </p>
+          <div className="grid grid-cols-3 gap-1.5 text-xs">
+            <button
+              type="button"
+              onClick={() =>
+                handleDemoLogin("admin@intraflow.dev", "AdminPassword123!")
+              }
+              className="px-2 py-1.5 rounded-md border border-border bg-muted/40 hover:bg-muted text-foreground transition-colors font-medium text-center"
+            >
+              Admin
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                handleDemoLogin("mod.alpha@intraflow.dev", "DemoPassword123!")
+              }
+              className="px-2 py-1.5 rounded-md border border-border bg-muted/40 hover:bg-muted text-foreground transition-colors font-medium text-center"
+            >
+              Moderator
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                handleDemoLogin("dev.alpha@intraflow.dev", "DemoPassword123!")
+              }
+              className="px-2 py-1.5 rounded-md border border-border bg-muted/40 hover:bg-muted text-foreground transition-colors font-medium text-center"
+            >
+              Developer
+            </button>
+          </div>
         </div>
-      </form>
+      </div>
     </main>
   );
 };
