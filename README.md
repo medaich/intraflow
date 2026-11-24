@@ -1,232 +1,271 @@
-# Intraflow — Enterprise Operations & Project Management Web Client 🚀
+# Intraflow
 
-> **Intraflow** is a modern, responsive, Jira-inspired enterprise workflow and project management web application built with **React 19**, **TypeScript**, **Vite**, and **Tailwind CSS v4**. It interfaces with the high-performance Intraflow NestJS REST API, supporting strict 5-state Kanban lifecycle management, directed acyclic graph (DAG) task dependencies, role-based access control (RBAC), and persistent cookie-based session security.
+Intraflow is a team based project and task management application. The React web client connects to a NestJS REST API and MySQL database. It supports team scoped projects, task assignment, a guarded Kanban lifecycle, dependencies, comments, and file attachments.
 
----
+| Repository | Purpose |
+| --- | --- |
+| [intraflow](https://github.com/medaich/intraflow) | React web client |
+| [intraflow-api](https://github.com/medaich/intraflow-api) | NestJS API and database services |
 
-## 📑 Table of Contents
+## Features
 
-- [Core Technologies](#-core-technologies)
-- [Key Features & Capabilities](#-key-features--capabilities)
-- [Role-Based Access Control (RBAC)](#-role-based-access-control-rbac)
-- [Environment Separation & Configuration](#-environment-separation--configuration)
-- [Getting Started](#-getting-started)
-- [Development & Production Scripts](#-development--production-scripts)
-- [Architecture & Directory Structure](#-architecture--directory-structure)
-- [Backend Integration Documentation](#-backend-integration-documentation)
+- Signed, HTTP only cookie sessions with session recovery on page load.
+- Organization administrators, team moderators, and team members with separate permissions.
+- Team and project management, task assignment, and a five state Kanban board.
+- Task dependencies with cycle prevention and blocked task handling.
+- Review comments, rejection feedback, and file attachments.
+- Responsive project views for the board, task list, calendar, and progress summary.
+- Centralized API errors and TanStack Query cache updates after mutations.
 
----
+## Technology
 
-## 🛠 Core Technologies
+| Area | Technology |
+| --- | --- |
+| Web client | React 19, TypeScript 5.8, Vite 7 |
+| UI | Tailwind CSS 4, Radix UI, Lucide React |
+| Server state | TanStack Query 5 |
+| HTTP | Axios with browser credentials enabled |
+| API | NestJS 11, TypeORM 0.3, Node.js 22 |
+| Database | MySQL 8 |
+| Package manager | pnpm 10.6.1 |
 
-- **UI Library**: React 19 + TypeScript (ES2022 target)
-- **Bundler & Dev Server**: Vite 7 with Fast Refresh and Hot Module Replacement (HMR)
-- **Styling**: Tailwind CSS v4 with Jira-inspired neutral-cool slate surfaces and primary blue accents
-- **Server State & Caching**: TanStack React Query v5 (automatic cache invalidation and pessimistic locking synchronization)
-- **HTTP Client**: Axios with interceptors, global error parsing, and credentials management (`withCredentials: true`)
-- **UI Components & Primitives**: Radix UI dialogs, dropdowns, and accessible component primitives
-- **Notifications**: Sonner stacked toast notifications
-- **Icons**: Lucide React
+## Architecture
 
----
+The browser calls the API through a shared Axios client. API authorization is enforced by the NestJS guards and policy service; the client only hides actions that the current user cannot perform. The API uses TypeORM for MySQL persistence and contains the business rules for teams, projects, tasks, authentication, comments, and attachments.
 
-## ✨ Key Features & Capabilities
-
-### 1. Robust Cookie-Based Session Authentication
-- **Secure Authentication**: Uses signed, HTTP-only session cookies via `POST /auth/signin` and `POST /auth/signout`. Zero sensitive tokens stored in `localStorage` or `sessionStorage`.
-- **Session Hydration**: Automated session recovery on initial page load via `GET /users/me`, restoring identity and team membership across page refreshes.
-- **Onboarding & Recovery Flows**:
-  - Invitation acceptance with token verification (`/signup?token=...`).
-  - Forgot password requests and secure token-based password reset (`/reset-password?token=...`).
-  - Two-step email change verification (`/confirm-email?token=...`).
-- **Route Guards**: `<ProtectedRoute />` protects authenticated areas; `<AdminRoute />` enforces global administrator privileges.
-
-### 2. Upgraded Kanban Board & Workflow Engine
-- **5-State Finite State Machine**:
-  $$\text{UNASSIGNED} \longleftrightarrow \text{PENDING} \longrightarrow \text{IN\_PROGRESS} \longrightarrow \text{IN\_REVIEW} \longrightarrow \text{COMPLETED}$$
-- **Authentic HTML5 Drag-and-Drop**:
-  - Drag cards with immediate visual elevation and opacity feedback.
-  - Active drop target column highlighting (`ring-2 ring-primary/25 bg-primary/5`).
-  - **Drop Transition Rules & RBAC Enforcement**:
-    - `UNASSIGNED → PENDING`: Moderator/Admin only; triggers Assignment Dialog.
-    - `PENDING → UNASSIGNED`: Moderator/Admin only; dispatches unassign mutation.
-    - `PENDING → IN_PROGRESS`: Assigned developer only; verifies unblocked prerequisites (`isBlocked: false`); dispatches start mutation.
-    - `IN_PROGRESS → IN_REVIEW`: Assigned developer only; dispatches submit mutation.
-    - `IN_REVIEW → COMPLETED`: Moderator/Admin only; dispatches validation mutation.
-    - `IN_REVIEW → IN_PROGRESS`: Moderator/Admin only; backward drag triggers `RejectTaskModal` requiring mandatory feedback reason (10–500 chars).
-    - **Illegal Transitions**: Attempting invalid state jumps (e.g., `UNASSIGNED → COMPLETED`) is intercepted client-side with descriptive explanatory toasts, preventing invalid backend requests.
-- **Responsive Horizontal Scrolling Canvas**:
-  - Eliminates card crushing by utilizing fixed-width columns (`w-[290px] sm:w-[310px] shrink-0`) in a horizontal scroll container (`overflow-x: auto scrollbar-thin`).
-  - Task cards utilize `line-clamp-2 break-words` to ensure clean, multiline text wrapping without clipping.
-
-### 3. Directed Acyclic Graph (DAG) Task Dependencies
-- Tasks support explicit prerequisite dependencies (`dependsOn`).
-- Derived `isBlocked` flag computed by the backend; blocked tasks cannot be started until all prerequisite tasks reach `COMPLETED` status.
-- Dependency cycle detection handled with friendly conflict notifications (`409 Conflict`).
-
-### 4. Collaboration: Comments & File Attachments
-- **Task Comments**: Threaded discussions displaying author avatars, timestamps, and edit/delete capabilities for comment authors.
-- **Rejection Feedback**: Rejection reasons are stored as ordinary user comments authored by the reviewing moderator (`isSystem: false`), documenting required fixes in the activity feed.
-- **File Attachments**: Drag-and-drop file upload zone (up to 10MB limit with binary validation), file listing, deletion, and authenticated blob download streaming.
-
-### 5. Teams & Project Management
-- **Team Roster Management**: Admin team creation/deletion; role assignments (`MODERATOR` vs `MEMBER`); safe removal with cascading task unassignment.
-- **Project Tracking**: Multi-project portfolios, completion rate progress bars, status badges (`ACTIVE`, `ON_HOLD`, `COMPLETED`, `ARCHIVED`), and overdue deliverable alerts.
-
----
-
-## 👥 Role-Based Access Control (RBAC)
-
-The application enforces a dual-tier authorization model synchronized with the NestJS backend:
-
-### Global Roles
-| Global Role | Scope | Key Permissions |
-| :--- | :--- | :--- |
-| **`ADMIN`** | Organization-wide | Create/edit/delete any project or team; invite users; view all users; assign/validate/reject any task. |
-| **`EMPLOYEE`** | Team-scoped | Restricted to assigned projects and team tasks; cannot access `/users` or `/teams` administrative views. |
-
-### Team Membership Roles
-| Team Role | Scope | Key Permissions |
-| :--- | :--- | :--- |
-| **`MODERATOR`** | Owning Team | Create tasks in owned projects; assign tasks to team members; validate and reject tasks in review; update project status to `COMPLETED`. |
-| **`MEMBER`** | Assigned Tasks | Start and submit assigned tasks; participate in discussions; read team roster. Cannot assign or validate tasks. |
-
----
-
-## 🌐 Environment Separation & Configuration
-
-The application cleanly distinguishes between **development**, **staging**, and **production** environments using Vite environment files.
-
-### Configuration Template (`.env.example`)
-
-Copy `.env.example` to `.env` (or `.env.local` for local overrides):
-
-```bash
-cp .env.example .env
+```mermaid
+flowchart LR
+    Browser["Browser<br/>React and TypeScript"] --> Query["TanStack Query"]
+    Query --> Axios["Axios API client<br/>withCredentials"]
+    Axios -->|REST requests| API["NestJS REST API"]
+    API --> Auth["AuthGuard and<br/>AccessPolicyService"]
+    Auth --> Modules["Auth, Users, Teams,<br/>Projects, Tasks"]
+    Modules --> ORM["TypeORM"]
+    ORM --> DB[("MySQL 8")]
+    API -. "Set-Cookie / session cookie" .-> Browser
+    Modules --> Files["Attachment storage"]
+    Modules --> Mail["SMTP or in-memory mail"]
 ```
 
-```ini
-# Base URL for the NestJS Backend API
-VITE_API_URL=http://localhost:3000
+### Authentication and sessions
 
-# Client origin for email link alignment
-VITE_APP_URL=http://localhost:5173
+The API uses a signed, HTTP only session cookie. The frontend does not read an access token from the sign-in response or store one in browser storage. Its Axios client sends and receives cookies with `withCredentials: true`.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Browser as React browser client
+    participant API as Intraflow API
+    participant DB as MySQL
+    User->>Browser: Submit email and password
+    Browser->>API: POST /auth/signin with credentials
+    API->>DB: Verify account and session validity
+    API-->>Browser: Set signed, HTTP only session cookie
+    Browser->>API: GET /users/me with cookie
+    API->>DB: Resolve current user and membership
+    API-->>Browser: Return current user profile
+    Browser-->>User: Render role scoped application
 ```
 
-### Environment Comparison Matrix
+The browser origin must match the backend `CORS_ORIGIN` setting exactly, and the API must allow credentialed requests. For local development, use `http://localhost` consistently for both services. For deployment, use HTTPS and keep the frontend and API on the same site so the API's `SameSite=Lax` session cookie can be sent by the browser. Set `COOKIE_SECURE=true` for production HTTPS.
 
-| Parameter | Development | Staging / Production |
-| :--- | :--- | :--- |
-| **Frontend URL** | `http://localhost:5173` | `https://app.yourdomain.com` |
-| **Backend API URL** | `http://localhost:3000` | `https://api.yourdomain.com` |
-| **Session Cookies** | `SameSite=Lax; HttpOnly` | `SameSite=None; Secure; HttpOnly` (over HTTPS) |
-| **Backend CORS Origin** | `http://localhost:5173` | `https://app.yourdomain.com` |
-| **Email Testing Inbox** | Mailpit (`http://localhost:8025`) | Production SMTP (SES, SendGrid, etc.) |
+## Roles and permissions
 
-> [!IMPORTANT]
-> **Session Cookie Requirements**:
-> Because the client utilizes signed HTTP-only cookies (`withCredentials: true`), the backend CORS configuration (`CORS_ORIGIN`) **must** match the exact protocol, domain, and port of the frontend client. In production, HTTPS is required for cross-domain cookie transmission (`SameSite=None; Secure`).
+There are two global roles. `ADMIN` is organization wide. `EMPLOYEE` accounts may hold at most one team membership with the team role `MODERATOR` or `MEMBER`.
 
----
+| Action | Administrator | Team moderator | Team member |
+| --- | --- | --- | --- |
+| Manage teams and project records | Yes | No | No |
+| Create tasks in a project | Yes | Own team projects | No |
+| Assign tasks in a team project | To a non admin user of that project's team | To a non admin user of their own team | No |
+| Assign a standalone or team less project task | To any non admin user | No | No |
+| Start or submit a task | No | When assigned | When assigned |
+| Validate or reject a task in review | Yes | Own team tasks | No |
+| Assign an administrator as a task owner | Never | Never | Never |
 
-## 🚀 Getting Started
+Assignment options in the browser are filtered using the selected project's actual team. The API checks the same rules when the assignment request is received; client side filtering does not replace server authorization.
+
+## Task lifecycle and Kanban
+
+Task state is persisted by the API. New tasks start unassigned, and assigning a task moves it to `PENDING`. The backend accepts only these state transitions:
+
+```mermaid
+stateDiagram-v2
+    [*] --> UNASSIGNED: create task
+    UNASSIGNED --> PENDING: assign
+    PENDING --> UNASSIGNED: unassign
+    PENDING --> IN_PROGRESS: start by assignee
+    IN_PROGRESS --> IN_REVIEW: submit by assignee
+    IN_REVIEW --> COMPLETED: validate
+    IN_REVIEW --> IN_PROGRESS: reject with feedback
+    COMPLETED --> [*]
+```
+
+Starting a task also requires all of its dependencies to be `COMPLETED`. Rejection returns the task to `IN_PROGRESS` and records the reviewer's reason as a task comment. `COMPLETED` is terminal. The board offers task actions for keyboard and touch use; native drag and drop is an optional desktop interaction.
+
+## Dependencies
+
+Tasks can depend on other tasks in the same project. The API rejects dependency cycles and derives `isBlocked` and `blockedBy` from incomplete prerequisites. A blocked task remains in `PENDING`, but cannot be started until every prerequisite is complete.
+
+```mermaid
+flowchart LR
+    Prerequisite["Prerequisite task"] -->|must be COMPLETED| Dependent["Dependent task"]
+    Prerequisite --> StartCheck["Start check"]
+    Dependent --> StartCheck
+    StartCheck -->|all prerequisites complete| Work["IN_PROGRESS"]
+    StartCheck -->|any prerequisite incomplete| Pending["Remains PENDING"]
+```
+
+## Teams, projects, and domain model
+
+Projects may be associated with a team or left team less. Non administrators see projects within their own team. An employee can have at most one team membership; administrators are not team members. Tasks may belong to a project or be standalone. Dependencies connect tasks within one project.
+
+```mermaid
+erDiagram
+    USER ||--o| TEAM_MEMBERSHIP : has
+    TEAM ||--o{ TEAM_MEMBERSHIP : contains
+    TEAM o|--o{ PROJECT : owns
+    USER ||--o{ PROJECT : creates
+    PROJECT o|--o{ TASK : contains
+    USER o|--o{ TASK : assigned
+    TASK }o--o{ TASK : depends_on
+    TASK ||--o{ COMMENT : has
+    USER o|--o{ COMMENT : writes
+    TASK ||--o{ ATTACHMENT : has
+    USER o|--o{ ATTACHMENT : uploads
+```
+
+The database model also includes account recovery and invitation records. Task records track their start, submission, and completion timestamps, alongside priority, status, assignee, and optional project.
+
+Project statuses are `ACTIVE`, `ON_HOLD`, `COMPLETED`, and `ARCHIVED`. Administrators manage project records; a team moderator may mark an own-team project `COMPLETED` only after all its tasks are complete. Archived projects reject task operations, and projects containing tasks cannot be deleted.
+
+### Frontend structure
+
+```text
+src/
+  components/       Shared UI, task, team, and route-guard components
+  contexts/         Authentication, theme, and sidebar state
+  hooks/            Reusable client hooks
+  lib/              Axios client and shared utilities
+  pages/            Authentication and dashboard routes
+  types/            API-aligned TypeScript domain types
+  App.tsx           Route definitions
+  main.tsx          React and TanStack Query providers
+```
+
+## API integration
+
+The frontend uses the API's paginated `{ data, meta }` response for resource collections and updates the relevant TanStack Query caches after successful writes. Common API operations include:
+
+| Capability | API routes used by the client |
+| --- | --- |
+| Authentication | `POST /auth/signup`, `/auth/signin`, `/auth/signout`, `/auth/forgot-password`, and `/auth/reset-password` |
+| Profile and users | `GET /users/me`, `/users`, `/users/:userId`; `POST /users/me/email` and `/users/me/email/confirm` |
+| Teams and projects | `/teams`, `/teams/:teamId`, `/projects`, and their detail or roster routes |
+| Task collection | `/tasks`, `/tasks/my-tasks`, `/projects/:projectId/tasks` |
+| Assignment | `POST /tasks/:taskId/assign`, `POST /tasks/:taskId/unassign` |
+| Task workflow | `POST /tasks/my-tasks/:taskId/start`, `POST /tasks/my-tasks/:taskId/submit`, `POST /tasks/:taskId/validate`, `POST /tasks/:taskId/reject` |
+| Collaboration | `/tasks/:taskId/comments`, `/tasks/:taskId/attachments`, and `/tasks/:taskId/dependencies` |
+
+The API's interactive OpenAPI page is available at `http://localhost:3000/docs` when the backend is running. Its health endpoint is `http://localhost:3000/health`.
+
+## Run locally
 
 ### Prerequisites
 
-- **Node.js**: v20+ or v22+
-- **pnpm**: v9+ or v10+ (recommended package manager)
-- **Backend API**: Running Intraflow NestJS backend on `http://localhost:3000`
-- **Mailpit**: Running for local email testing on `http://localhost:8025`
+- Node.js 22
+- pnpm 10.6.1
+- Docker Desktop, or a local MySQL 8 instance
+- The [Intraflow API repository](https://github.com/medaich/intraflow-api)
 
-### Installation
+### Start the API and database
+
+In a terminal, clone and configure the backend:
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-org/intraflow.git
+git clone https://github.com/medaich/intraflow-api.git
+cd intraflow-api
+pnpm install --frozen-lockfile
+```
+
+Copy `.env.example` to `.env` and configure a private `COOKIE_KEY` and database password for your local environment. The Docker Compose configuration exposes MySQL at `localhost:3308` and Mailpit at `localhost:8025`. Start those services, then run the API:
+
+```bash
+docker compose up -d mysql mailpit
+pnpm run migration:run
+pnpm run start:dev
+```
+
+Set `CORS_ORIGIN=http://localhost:5173` so it exactly matches the frontend's development origin. Set `APP_URL=http://localhost:5173` if email links should open in the local frontend. For local HTTP development, `COOKIE_SECURE=false` is expected.
+
+### Start the frontend
+
+In another terminal:
+
+```bash
+git clone https://github.com/medaich/intraflow.git
 cd intraflow
-
-# Install dependencies
-pnpm install
-
-# Configure environment
-cp .env.example .env
+corepack prepare pnpm@10.6.1 --activate
+pnpm install --frozen-lockfile
 ```
 
-### Starting the Development Server
+Copy `.env.example` to `.env.local`. Set `VITE_API_URL` to the API base URL; the local default is `http://localhost:3000`. Then run:
 
 ```bash
-pnpm run dev
+pnpm dev
 ```
 
-The application will be accessible at [http://localhost:5173](http://localhost:5173).
+Vite serves the frontend at `http://localhost:5173` by default. `VITE_API_URL` is embedded in the frontend build, so configure it before building for another environment.
 
----
+### Demo data
 
-## 📦 Development & Production Scripts
+The backend's `pnpm run seed:demo` command creates local demo accounts, teams, a project, and six example tasks. It refuses to run when `NODE_ENV=production`. New accounts use development only credentials defined in the seeder; existing accounts are left unchanged.
 
-| Command | Description |
-| :--- | :--- |
-| `pnpm run dev` | Starts the Vite development server with Hot Module Replacement on port 5173. |
-| `pnpm run build` | Runs TypeScript compilation check (`tsc -b`) and produces optimized production assets in `dist/`. |
-| `pnpm run lint` | Runs ESLint across all TypeScript and React source files with 0 allowable errors. |
-| `pnpm run preview` | Locally serves the production build from `dist/` to verify production behavior. |
+| Demo task | Target state on fresh seed or reset | Scenario |
+| --- | --- | --- |
+| Base Architecture Setup | `COMPLETED` | Finished prerequisite |
+| Database Indexing & Performance Tuning | `IN_PROGRESS` | Depends on the completed architecture task |
+| Cache Layer Deployment | `PENDING` | Blocked by database indexing |
+| Security Policy Review | `PENDING` | Assigned and ready to start |
+| API Documentation Sync | `IN_REVIEW` | Submitted for review |
+| Webhook Delivery Architecture | `IN_REVIEW` | Rejected with feedback, then resubmitted |
 
----
+The seed creates these local development accounts when they do not already exist. Their initial passwords are assigned only when a new account is created; rerunning the seed does not change an existing account's password. These credentials are for a local demo database only.
 
-## 📂 Architecture & Directory Structure
+| Account | Initial password | Role |
+| --- | --- | --- |
+| `admin@intraflow.dev` | `AdminPassword123!` | Administrator |
+| `mod.alpha@intraflow.dev` | `DemoPassword123!` | Alpha Core moderator |
+| `dev.alpha@intraflow.dev` | `DemoPassword123!` | Alpha Core member |
+| `mod.beta@intraflow.dev` | `DemoPassword123!` | Beta Platform moderator |
+| `dev.beta@intraflow.dev` | `DemoPassword123!` | Beta Platform member |
 
-```
-intraflow/
-├── docs/                                # Comprehensive integration and audit reports
-│   └── frontend-audit/
-│       ├── API_INTEGRATION_MATRIX.md
-│       ├── FINAL_INTEGRATION_CHECKLIST.md
-│       ├── FINAL_UI_AND_KANBAN_REFINEMENT_REPORT.md
-│       ├── FRONTEND_IMPLEMENTATION_ROADMAP.md
-│       ├── FULL_IMPLEMENTATION_REPORT.md
-│       ├── INTRAFLOW_FRONTEND_CURRENT_STATE_AUDIT.md
-│       └── MANUAL_ACCEPTANCE_REPORT.md
-├── src/
-│   ├── components/
-│   │   ├── route-guards/                # AdminRoute and ProtectedRoute guards
-│   │   ├── tasks/                       # TaskCard, TaskDetailModal, RejectModal, CreateModal
-│   │   ├── teams/                       # TeamRoster table and management actions
-│   │   ├── ui/                          # Radix & CVA primitives (Badge, Dialog, Button, etc.)
-│   │   ├── header.tsx                   # Jira-inspired 3-section proportional navigation bar
-│   │   ├── sidebar.tsx                  # Draggable, resizable, collapsible navigation sidebar
-│   │   └── search-bar.tsx               # Global search input with instant routing
-│   ├── contexts/
-│   │   ├── AuthContext.tsx              # Session bootstrap, identity store & auth actions
-│   │   └── SidebarContext.tsx           # Sidebar toggle, drag-resize state & persistence
-│   ├── lib/
-│   │   ├── api-client.ts                # Axios instance with credentials & error translation
-│   │   └── utils.ts                     # Tailwind class merge utility (cn)
-│   ├── pages/
-│   │   ├── dashboard/                   # Dashboard pages (Overview, Projects, Teams, Users)
-│   │   │   ├── project-view/            # Project sub-routes (Kanban Board, Tasks, Stats, Calendar)
-│   │   │   └── dashboard-layout.tsx     # Responsive dashboard shell & navigation container
-│   │   ├── login.tsx                    # Cookie-based signin page
-│   │   ├── signup.tsx                   # Invitation onboarding flow
-│   │   ├── forgot-password.tsx          # Password recovery request page
-│   │   ├── reset-password.tsx           # Password reset execution page
-│   │   └── confirm-email.tsx            # Two-step email change confirmation
-│   ├── types/
-│   │   └── index.ts                     # Strict TypeScript domain interfaces matching backend DTOs
-│   ├── App.tsx                          # Application router configuration
-│   └── main.tsx                         # QueryClient provider & root entry point
-├── .env.example                         # Environment configuration template
-├── package.json                         # Project dependencies and npm scripts
-└── vite.config.ts                       # Vite configuration with path aliases (@ -> src)
+The seeder is repeatable and does not create duplicate active demo records. By default, it leaves existing task states and history untouched. To recreate only the six named tasks in the `Intraflow NextGen Platform` project, the backend requires both an explicit flag and confirmation token:
+
+```bash
+DEMO_SEED_RESET_CONFIRMATION=RESET_INTRAFLOW_DEMO_TASKS pnpm run seed:demo -- --reset-demo-tasks
 ```
 
----
+In PowerShell, set `$env:DEMO_SEED_RESET_CONFIRMATION` to `RESET_INTRAFLOW_DEMO_TASKS`, run `pnpm run seed:demo -- --reset-demo-tasks`, then remove that environment variable. The reset is refused in production, if the named project is not assigned to `Alpha Core` or is archived, if a task outside the demo set depends on one of the demo tasks, or if the target tasks have file attachments. The reset removes the selected demo tasks and their task comments and dependency links before recreating the six scenarios; it does not reset other project, team, or user data. Run this only against a disposable development database.
 
-## 📚 Backend Integration Documentation
+## Commands and CI
 
-For complete technical specifications, contract mappings, and audit histories, consult the documentation directory:
+| Command | Purpose |
+| --- | --- |
+| `pnpm dev` | Start the Vite development server |
+| `pnpm run build` | Run TypeScript project compilation, then create production assets in `dist/` |
+| `pnpm run lint` | Run ESLint across the frontend repository |
+| `pnpm run preview` | Serve the production build locally |
 
-- [FINAL_UI_AND_KANBAN_REFINEMENT_REPORT.md](file:///c:/Users/Mohammed/Desktop/Github/intraflow/docs/frontend-audit/FINAL_UI_AND_KANBAN_REFINEMENT_REPORT.md) — Final quality, visual restoration, and Kanban drag-and-drop verification report.
-- [FULL_IMPLEMENTATION_REPORT.md](file:///c:/Users/Mohammed/Desktop/Github/intraflow/docs/frontend-audit/FULL_IMPLEMENTATION_REPORT.md) — Comprehensive technical implementation report covering all phases.
-- [MANUAL_ACCEPTANCE_REPORT.md](file:///c:/Users/Mohammed/Desktop/Github/intraflow/docs/frontend-audit/MANUAL_ACCEPTANCE_REPORT.md) — Manual browser acceptance testing evidence across all scenarios.
-- [API_INTEGRATION_MATRIX.md](file:///c:/Users/Mohammed/Desktop/Github/intraflow/docs/frontend-audit/API_INTEGRATION_MATRIX.md) — Complete endpoint contract mapping between frontend and backend.
-- [FINAL_INTEGRATION_CHECKLIST.md](file:///c:/Users/Mohammed/Desktop/Github/intraflow/docs/frontend-audit/FINAL_INTEGRATION_CHECKLIST.md) — Exhaustive checklist verifying contract conformance.
+GitHub Actions runs ESLint and the production build on pushes and pull requests targeting `main`. The workflow does not run an automated test suite.
+
+## Deployment considerations
+
+- Serve the API and frontend over HTTPS in production.
+- Set the backend `CORS_ORIGIN` to the exact frontend origin and allow credentialed requests.
+- Keep the frontend and API on the same site for the API's `SameSite=Lax` cookie. Use `COOKIE_SECURE=true` over HTTPS.
+- Use a strong, private `COOKIE_KEY`; the backend validates a longer key for production.
+- Set backend `APP_URL` to the public frontend origin for links in transactional email.
+- Configure MySQL, SMTP, and persistent attachment storage for the deployment environment. The backend's default attachment storage is local disk.
+
+This repository contains the frontend client; the API and database are maintained in the linked backend repository.
