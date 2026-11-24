@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient, getErrorMessage } from "@/lib/api-client";
 import { useAuth } from "@/contexts/AuthContext";
-import type { Task, PaginatedResponse, TaskStatus, User, Team } from "@/types";
+import type { Task, PaginatedResponse, TaskStatus, User, Team, Project } from "@/types";
 import { TaskCard } from "@/components/tasks/task-card";
 import { TaskDetailModal } from "@/components/tasks/task-detail-modal";
 import { RejectTaskModal } from "@/components/tasks/reject-task-modal";
@@ -40,6 +40,8 @@ export default function KanbanBoard() {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [rejectingTask, setRejectingTask] = useState<Task | null>(null);
   const [assigningTask, setAssigningTask] = useState<Task | null>(null);
+  const [unassigningTask, setUnassigningTask] = useState<Task | null>(null);
+  const [validatingTask, setValidatingTask] = useState<Task | null>(null);
   const [selectedAssigneeId, setSelectedAssigneeId] = useState<number | "">("");
   const [dragOverColumn, setDragOverColumn] = useState<TaskStatus | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -77,41 +79,98 @@ export default function KanbanBoard() {
     },
   });
 
-  // Query eligible users for task assignment (Admin only)
-  const { data: usersData } = useQuery({
-    queryKey: ["users-for-kanban-assignment"],
+  const {
+    data: assignmentProject,
+    isLoading: isAssignmentProjectLoading,
+    isError: isAssignmentProjectError,
+    error: assignmentProjectError,
+  } = useQuery({
+    queryKey: ["assignment-project", assigningTask?.projectId],
+    queryFn: async () => {
+      const res = await apiClient.get<Project>(`/projects/${assigningTask?.projectId}`);
+      return res.data;
+    },
+    enabled: assigningTask !== null && assigningTask.projectId !== null,
+  });
+
+  const assignmentContextKnown =
+    assigningTask !== null &&
+    (assigningTask.projectId === null || assignmentProject !== undefined);
+  const assignmentTeamId = assignmentProject?.teamId ?? null;
+  const canAssignToTask =
+    isUserAdmin ||
+    (isModerator && assignmentTeamId !== null && assignmentTeamId === user?.membership?.teamId);
+
+  // Assignment choices are loaded for the task's own project team, never from a global list.
+  const {
+    data: teamData,
+    isLoading: isAssignmentTeamLoading,
+    isError: isAssignmentTeamError,
+    error: assignmentTeamError,
+  } = useQuery({
+    queryKey: ["team-for-kanban-assignment", assignmentTeamId],
+    queryFn: async () => {
+      const res = await apiClient.get<Team>(`/teams/${assignmentTeamId}`);
+      return res.data;
+    },
+    enabled: assigningTask !== null && canAssignToTask && assignmentTeamId !== null,
+  });
+
+  const {
+    data: usersData,
+    isLoading: isAssignmentUsersLoading,
+    isError: isAssignmentUsersError,
+    error: assignmentUsersError,
+  } = useQuery({
+    queryKey: ["users-for-kanban-standalone-assignment"],
     queryFn: async () => {
       const res = await apiClient.get<PaginatedResponse<User>>("/users", {
         params: { limit: 100 },
       });
       return res.data;
     },
-    enabled: isUserAdmin,
+    enabled:
+      assigningTask !== null &&
+      isUserAdmin &&
+      assignmentContextKnown &&
+      assignmentTeamId === null,
   });
 
-  // Team members query for assignment (for employees / moderators)
-  const { data: teamData } = useQuery({
-    queryKey: ["my-team-for-kanban-assignment"],
-    queryFn: async () => {
-      const res = await apiClient.get<Team>("/teams/my-team");
-      return res.data;
-    },
-    enabled: !isUserAdmin && !!user?.membership?.teamId,
-  });
+  const isAssignmentOptionsLoading =
+    assigningTask !== null &&
+    (isAssignmentProjectLoading ||
+      (assignmentTeamId !== null && canAssignToTask && isAssignmentTeamLoading) ||
+      (isUserAdmin && assignmentContextKnown && assignmentTeamId === null && isAssignmentUsersLoading));
 
-  const eligibleUsers: User[] = isUserAdmin
-    ? usersData?.data || []
-    : (teamData?.members || []).map((m) => ({
-        userId: m.userId,
-        name: m.user?.name || m.name || `User #${m.userId}`,
-        email: m.email || "",
-        role: "EMPLOYEE" as const,
-        membership: {
-          teamId: m.teamId || teamData?.teamId || 0,
-          role: m.role,
-        },
-        createdAt: m.createdAt || "",
-      }));
+  const assignmentOptionsError = isAssignmentProjectError
+    ? `Unable to load task project: ${getErrorMessage(assignmentProjectError)}`
+    : assignmentTeamId !== null && canAssignToTask && isAssignmentTeamError
+      ? `Unable to load this project's team members: ${getErrorMessage(assignmentTeamError)}`
+      : isUserAdmin && assignmentContextKnown && assignmentTeamId === null && isAssignmentUsersError
+        ? `Unable to load eligible users: ${getErrorMessage(assignmentUsersError)}`
+        : null;
+
+  const eligibleAssignees = assignmentTeamId !== null && canAssignToTask
+    ? (teamData?.members || [])
+        .filter((member) => member.user?.role !== "ADMIN")
+        .map((member) => ({
+          userId: member.userId,
+          name: member.user?.name || member.name || `User #${member.userId}`,
+          email: member.email || "",
+        }))
+    : isUserAdmin
+      ? (usersData?.data || [])
+          .filter((candidate) => candidate.role !== "ADMIN")
+          .map((candidate) => ({
+            userId: candidate.userId,
+            name: candidate.name,
+            email: candidate.email,
+          }))
+      : [];
+
+  useEffect(() => {
+    setSelectedAssigneeId("");
+  }, [assigningTask?.taskId, assignmentTeamId]);
 
   const tasks = tasksData?.data || [];
 
@@ -154,6 +213,7 @@ export default function KanbanBoard() {
       toast.success("Task Approved & Completed", {
         description: "The task has been successfully verified.",
       });
+      setValidatingTask(null);
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
       queryClient.invalidateQueries({ queryKey: ["project-tasks"] });
     },
@@ -170,6 +230,7 @@ export default function KanbanBoard() {
       toast.success("Task Unassigned", {
         description: "Task moved back to the unassigned backlog.",
       });
+      setUnassigningTask(null);
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
       queryClient.invalidateQueries({ queryKey: ["project-tasks"] });
     },
@@ -196,19 +257,25 @@ export default function KanbanBoard() {
     },
   });
 
+  const isBoardMutationPending =
+    startMutation.isPending ||
+    submitMutation.isPending ||
+    validateMutation.isPending ||
+    unassignMutation.isPending ||
+    assignMutation.isPending;
+
   const handleCardDrop = (targetStatus: TaskStatus, rawData: string) => {
     try {
       const data = JSON.parse(rawData);
       const taskId = Number(data.taskId);
-      const fromStatus: TaskStatus = data.fromStatus;
-      const assignedToId: number | undefined = data.assignedToId;
-      const isBlocked: boolean = !!data.isBlocked;
-
-      if (!taskId || !fromStatus) return;
-      if (fromStatus === targetStatus) return; // Same column drop, no action needed
+      if (!taskId) return;
 
       const task = tasks.find((t) => t.taskId === taskId);
       if (!task) return;
+      const fromStatus = task.status;
+      const assignedToId = task.assignedTo?.userId;
+      const isBlocked = task.isBlocked;
+      if (fromStatus === targetStatus) return; // No transition is needed within the current column.
 
       // 1. UNASSIGNED -> PENDING: Requires assigning a team member
       if (fromStatus === "UNASSIGNED" && targetStatus === "PENDING") {
@@ -230,7 +297,7 @@ export default function KanbanBoard() {
           });
           return;
         }
-        unassignMutation.mutate(taskId);
+        setUnassigningTask(task);
         return;
       }
 
@@ -272,7 +339,7 @@ export default function KanbanBoard() {
           });
           return;
         }
-        validateMutation.mutate(taskId);
+        setValidatingTask(task);
         return;
       }
 
@@ -342,6 +409,9 @@ export default function KanbanBoard() {
           )}
         </div>
       </div>
+      <p className="text-xs text-muted-foreground">
+        Use the task actions to move work with a keyboard or touch screen. Dragging is optional.
+      </p>
 
       {/* Kanban Columns Horizontal Scrolling Canvas */}
       {isLoading ? (
@@ -428,7 +498,11 @@ export default function KanbanBoard() {
                         onOpenDetails={(id) => setSelectedTaskId(id)}
                         onOpenReject={(t) => setRejectingTask(t)}
                         onOpenAssign={(t) => setAssigningTask(t)}
-                        eligibleUsers={eligibleUsers}
+                        onOpenUnassign={(t) => setUnassigningTask(t)}
+                        onStart={(t) => startMutation.mutate(t.taskId)}
+                        onSubmit={(t) => submitMutation.mutate(t.taskId)}
+                        onOpenValidate={(t) => setValidatingTask(t)}
+                        actionsDisabled={isBoardMutationPending}
                       />
                     ))
                   )}
@@ -440,46 +514,68 @@ export default function KanbanBoard() {
       )}
 
       {/* Assign Task Modal (triggered via Drag to Pending or Assign Button) */}
+      {/* Task assignment dialog (eligibility is resolved from the task's project). */}
       <Dialog
         open={assigningTask !== null}
         onOpenChange={(open) => {
-          if (!open) {
+          if (!open && !assignMutation.isPending) {
             setAssigningTask(null);
             setSelectedAssigneeId("");
           }
         }}
       >
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <UserPlus className="size-4 text-primary" />
               Assign Task #{assigningTask?.taskId}
             </DialogTitle>
             <DialogDescription>
-              Assign &quot;{assigningTask?.name}&quot; to a team member to transition it to Pending Start.
+              Assign &quot;{assigningTask?.name}&quot; to an eligible member to move it to Pending Start.
             </DialogDescription>
           </DialogHeader>
 
           <div className="py-3 space-y-3">
             <div className="space-y-1.5">
-              <label htmlFor="assigneeSelect" className="text-xs font-semibold text-foreground">
-                Team Member <span className="text-destructive">*</span>
+              <label htmlFor="assigneeSelect" className="text-sm font-medium">
+                Eligible assignee <span className="text-destructive">*</span>
               </label>
               <select
                 id="assigneeSelect"
-                className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                className="w-full min-h-11 px-3 rounded-md border border-input bg-background text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 value={selectedAssigneeId}
+                disabled={
+                  isAssignmentOptionsLoading ||
+                  !!assignmentOptionsError ||
+                  eligibleAssignees.length === 0 ||
+                  assignMutation.isPending
+                }
                 onChange={(e) =>
                   setSelectedAssigneeId(e.target.value ? Number(e.target.value) : "")
                 }
               >
-                <option value="">-- Select team member --</option>
-                {eligibleUsers.map((u) => (
+                <option value="">
+                  {isAssignmentOptionsLoading ? "Loading eligible members…" : "-- Select an assignee --"}
+                </option>
+                {eligibleAssignees.map((u) => (
                   <option key={u.userId} value={u.userId}>
                     {u.name} {u.email ? `(${u.email})` : ""}
                   </option>
                 ))}
               </select>
+              {assignmentOptionsError ? (
+                <p role="alert" className="text-xs text-destructive">
+                  {assignmentOptionsError}
+                </p>
+              ) : !isAssignmentOptionsLoading && eligibleAssignees.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  {!isUserAdmin && assignmentTeamId === null
+                    ? "Only administrators can assign standalone or team-less tasks."
+                    : !isUserAdmin && !canAssignToTask
+                      ? "You can assign tasks only in your own team's projects."
+                      : "No eligible non-admin members were found."}
+                </p>
+              ) : null}
             </div>
           </div>
 
@@ -487,6 +583,7 @@ export default function KanbanBoard() {
             <Button
               variant="outline"
               size="sm"
+              disabled={assignMutation.isPending}
               onClick={() => {
                 setAssigningTask(null);
                 setSelectedAssigneeId("");
@@ -496,7 +593,13 @@ export default function KanbanBoard() {
             </Button>
             <Button
               size="sm"
-              disabled={!selectedAssigneeId || assignMutation.isPending}
+              disabled={
+                !selectedAssigneeId ||
+                assignMutation.isPending ||
+                isAssignmentOptionsLoading ||
+                !!assignmentOptionsError ||
+                eligibleAssignees.length === 0
+              }
               onClick={() => {
                 if (assigningTask && selectedAssigneeId) {
                   assignMutation.mutate({
@@ -510,6 +613,78 @@ export default function KanbanBoard() {
                 <Loader2 className="size-3.5 mr-1.5 animate-spin" />
               )}
               Assign Task
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={unassigningTask !== null}
+        onOpenChange={(open) => {
+          if (!open && !unassignMutation.isPending) setUnassigningTask(null);
+        }}
+      >
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md">
+          <DialogHeader>
+            <DialogTitle>Return task to the backlog?</DialogTitle>
+            <DialogDescription>
+              &quot;{unassigningTask?.name}&quot; will become unassigned and return to the backlog.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={unassignMutation.isPending}
+              onClick={() => setUnassigningTask(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={!unassigningTask || unassignMutation.isPending}
+              onClick={() => {
+                if (unassigningTask) unassignMutation.mutate(unassigningTask.taskId);
+              }}
+            >
+              {unassignMutation.isPending && <Loader2 className="size-4 animate-spin" />}
+              Return to backlog
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={validatingTask !== null}
+        onOpenChange={(open) => {
+          if (!open && !validateMutation.isPending) setValidatingTask(null);
+        }}
+      >
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md">
+          <DialogHeader>
+            <DialogTitle>Complete this task?</DialogTitle>
+            <DialogDescription>
+              Approving &quot;{validatingTask?.name}&quot; moves it to Completed. Completed tasks cannot be reopened.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={validateMutation.isPending}
+              onClick={() => setValidatingTask(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={!validatingTask || validateMutation.isPending}
+              onClick={() => {
+                if (validatingTask) validateMutation.mutate(validatingTask.taskId);
+              }}
+            >
+              {validateMutation.isPending && <Loader2 className="size-4 animate-spin" />}
+              Approve and complete
             </Button>
           </DialogFooter>
         </DialogContent>

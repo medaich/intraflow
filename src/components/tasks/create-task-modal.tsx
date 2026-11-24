@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient, getErrorMessage } from "@/lib/api-client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -48,8 +48,15 @@ export function CreateTaskModal({
   );
   const [assignedToId, setAssignedToId] = useState<number | "">("");
 
+  const effectiveProjectId = projectId ?? (selectedProjectId || undefined);
+
   // Projects list if not scoped to a project
-  const { data: projectsData } = useQuery({
+  const {
+    data: projectsData,
+    isLoading: isProjectsLoading,
+    isError: isProjectsError,
+    error: projectsError,
+  } = useQuery({
     queryKey: ["projects-for-task"],
     queryFn: async () => {
       const res = await apiClient.get<PaginatedResponse<Project>>("/projects", {
@@ -60,8 +67,64 @@ export function CreateTaskModal({
     enabled: isOpen && !projectId,
   });
 
-  // Eligible users query for assignment (Admin only)
-  const { data: usersData } = useQuery({
+  const selectedProject = projectsData?.data?.find(
+    (project) => project.projectId === effectiveProjectId
+  );
+
+  // For scoped project (projectId prop), fetch the project details to get teamId
+  const {
+    data: scopedProject,
+    isLoading: isScopedProjectLoading,
+    isError: isScopedProjectError,
+    error: scopedProjectError,
+  } = useQuery({
+    queryKey: ["project", projectId],
+    queryFn: async () => {
+      const res = await apiClient.get<Project>(`/projects/${projectId}`);
+      return res.data;
+    },
+    enabled: isOpen && projectId !== undefined,
+  });
+
+  const resolvedProject = projectId !== undefined ? scopedProject : selectedProject;
+  const isProjectContextLoading =
+    effectiveProjectId !== undefined &&
+    !resolvedProject &&
+    (projectId !== undefined ? isScopedProjectLoading : isProjectsLoading);
+  const isProjectContextError = projectId !== undefined
+    ? isScopedProjectError
+    : isProjectsError && effectiveProjectId !== undefined;
+  const projectContextError = projectId !== undefined ? scopedProjectError : projectsError;
+  const isProjectContextKnown = effectiveProjectId === undefined || !!resolvedProject;
+  const resolvedTeamId = resolvedProject?.teamId ?? null;
+
+  const isModerator = user?.membership?.role === "MODERATOR";
+  const canAssign = isUserAdmin || isModerator;
+  const canAssignToProjectTeam =
+    isUserAdmin || (isModerator && resolvedTeamId === user?.membership?.teamId);
+
+  // Load members only for the selected project's exact team.
+  const {
+    data: projectTeamData,
+    isLoading: isTeamLoading,
+    isError: isTeamError,
+    error: teamError,
+  } = useQuery({
+    queryKey: ["team-for-task-assignment", resolvedTeamId],
+    queryFn: async () => {
+      const res = await apiClient.get<Team>(`/teams/${resolvedTeamId}`);
+      return res.data;
+    },
+    enabled: isOpen && canAssignToProjectTeam && resolvedTeamId !== null,
+  });
+
+  // Standalone tasks and team-less projects may only be assigned by an Admin.
+  const {
+    data: usersData,
+    isLoading: isUsersLoading,
+    isError: isUsersError,
+    error: usersError,
+  } = useQuery({
     queryKey: ["users-for-task-assign"],
     queryFn: async () => {
       const res = await apiClient.get<PaginatedResponse<User>>("/users", {
@@ -69,18 +132,17 @@ export function CreateTaskModal({
       });
       return res.data;
     },
-    enabled: isOpen && isUserAdmin,
+    enabled:
+      isOpen &&
+      isUserAdmin &&
+      isProjectContextKnown &&
+      resolvedTeamId === null,
   });
 
-  // Team members query for assignment (for employees / moderators)
-  const { data: teamData } = useQuery({
-    queryKey: ["my-team-for-task-assign"],
-    queryFn: async () => {
-      const res = await apiClient.get<Team>("/teams/my-team");
-      return res.data;
-    },
-    enabled: isOpen && !isUserAdmin && !!user?.membership?.teamId,
-  });
+  // Reset assignee when project changes
+  useEffect(() => {
+    setAssignedToId("");
+  }, [selectedProjectId, projectId, resolvedTeamId]);
 
   const createTaskMutation = useMutation({
     mutationFn: async (payload: {
@@ -115,7 +177,9 @@ export function CreateTaskModal({
         task = res.data;
       }
 
-      // If an assignee was selected, assign the task
+      let assignmentError: unknown;
+
+      // Keep task creation successful when its separate assignment request fails.
       if (payload.assignedToId && task?.taskId) {
         try {
           const assignRes = await apiClient.post<Task>(
@@ -123,17 +187,24 @@ export function CreateTaskModal({
             { userId: payload.assignedToId }
           );
           task = assignRes.data;
-        } catch {
-          // If assignment fails, task is still created in unassigned state
+        } catch (error) {
+          assignmentError = error;
         }
       }
 
-      return task;
+      return { task, assignmentError };
     },
-    onSuccess: (newTask) => {
-      toast.success("Task Created", {
-        description: `Task "${newTask.name}" has been created as ${newTask.status}.`,
-      });
+    onSuccess: ({ task: newTask, assignmentError }) => {
+      if (assignmentError !== undefined) {
+        toast.warning("Task Created Without Assignment", {
+          description: `Task "${newTask.name}" exists in the unassigned backlog. Assignment failed: ${getErrorMessage(assignmentError)} Open the task on the board to assign it.`,
+          duration: 10000,
+        });
+      } else {
+        toast.success("Task Created", {
+          description: `Task "${newTask.name}" has been created as ${newTask.status}.`,
+        });
+      }
       setName("");
       setDescription("");
       setAssignedToId("");
@@ -171,17 +242,59 @@ export function CreateTaskModal({
     });
   };
 
-  const eligibleAssignees: Array<{ userId: number; name: string; subtitle: string }> = isUserAdmin
-    ? (usersData?.data || []).map((u) => ({ userId: u.userId, name: u.name, subtitle: u.role }))
-    : (teamData?.members || []).map((m) => ({
-        userId: m.userId,
-        name: m.user?.name || m.name || `User #${m.userId}`,
-        subtitle: m.role,
-      }));
+  const isAssigneesLoading =
+    isProjectContextLoading ||
+    (resolvedTeamId !== null && canAssignToProjectTeam && isTeamLoading) ||
+    (isUserAdmin && isProjectContextKnown && resolvedTeamId === null && isUsersLoading);
+
+  const assigneeLoadError = isProjectContextError
+    ? `Unable to load project assignment rules: ${getErrorMessage(projectContextError)}`
+    : resolvedTeamId !== null && canAssignToProjectTeam && isTeamError
+      ? `Unable to load this project's team members: ${getErrorMessage(teamError)}`
+      : isUserAdmin && isProjectContextKnown && resolvedTeamId === null && isUsersError
+        ? `Unable to load eligible users: ${getErrorMessage(usersError)}`
+        : null;
+
+  const eligibleAssignees: Array<{ userId: number; name: string; subtitle: string }> = (() => {
+    if (resolvedTeamId !== null && canAssignToProjectTeam) {
+      return (projectTeamData?.members || [])
+        .filter((member) => member.user?.role !== "ADMIN")
+        .map((member) => ({
+          userId: member.userId,
+          name: member.user?.name || member.name || `User #${member.userId}`,
+          subtitle: member.role,
+        }));
+    }
+
+    if (isUserAdmin && isProjectContextKnown && resolvedTeamId === null) {
+      return (usersData?.data || [])
+        .filter((candidate) => candidate.role !== "ADMIN")
+        .map((candidate) => ({
+          userId: candidate.userId,
+          name: candidate.name,
+          subtitle: candidate.role,
+        }));
+    }
+
+    return [];
+  })();
+
+  const assigneeEmptyMessage = isModerator && effectiveProjectId === undefined
+    ? "Select a team project to see eligible members."
+    : isModerator && resolvedTeamId === null && isProjectContextKnown
+      ? "Only administrators can assign tasks in team-less projects."
+      : isModerator && resolvedTeamId !== user?.membership?.teamId
+        ? "This project belongs to another team, so you cannot assign its tasks."
+        : "No eligible non-admin members were found.";
 
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-md">
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open && !createTaskMutation.isPending) onClose();
+      }}
+    >
+      <DialogContent className="w-[calc(100vw-2rem)] max-w-md max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create Task</DialogTitle>
           <DialogDescription>
@@ -202,6 +315,7 @@ export function CreateTaskModal({
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
+              disabled={createTaskMutation.isPending}
             />
           </div>
 
@@ -215,6 +329,7 @@ export function CreateTaskModal({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
+              disabled={createTaskMutation.isPending}
             />
           </div>
 
@@ -226,9 +341,10 @@ export function CreateTaskModal({
               <select
                 id="projectSelectInput"
                 value={selectedProjectId}
-                onChange={(e) => setSelectedProjectId(Number(e.target.value))}
-                className="w-full bg-background border border-input rounded-md px-3 py-2 text-sm"
+                onChange={(e) => setSelectedProjectId(e.target.value ? Number(e.target.value) : "")}
+                className="w-full bg-background border border-input rounded-md px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 required={!isUserAdmin}
+                disabled={createTaskMutation.isPending || isProjectsLoading}
               >
                 {isUserAdmin ? (
                   <option value="">-- No project (Standalone task) --</option>
@@ -241,6 +357,14 @@ export function CreateTaskModal({
                   </option>
                 ))}
               </select>
+              {isProjectsLoading && (
+                <p className="text-xs text-muted-foreground">Loading projects…</p>
+              )}
+              {isProjectsError && (
+                <p role="alert" className="text-xs text-destructive">
+                  Unable to load projects: {getErrorMessage(projectsError)}
+                </p>
+              )}
             </div>
           )}
 
@@ -253,7 +377,8 @@ export function CreateTaskModal({
                 id="taskPrioritySelect"
                 value={priority}
                 onChange={(e) => setPriority(e.target.value as TaskPriority)}
-                className="w-full bg-background border border-input rounded-md px-3 py-2 text-sm"
+                className="w-full bg-background border border-input rounded-md px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                disabled={createTaskMutation.isPending}
               >
                 <option value="LOW">LOW</option>
                 <option value="MEDIUM">MEDIUM</option>
@@ -262,24 +387,43 @@ export function CreateTaskModal({
               </select>
             </div>
 
-            <div className="space-y-2">
-              <label htmlFor="taskAssigneeSelect" className="text-sm font-medium">
-                Assignee (Optional)
-              </label>
-              <select
-                id="taskAssigneeSelect"
-                value={assignedToId}
-                onChange={(e) => setAssignedToId(Number(e.target.value))}
-                className="w-full bg-background border border-input rounded-md px-3 py-2 text-sm"
-              >
-                <option value="">-- Unassigned (Backlog) --</option>
-                {eligibleAssignees.map((u) => (
-                  <option key={u.userId} value={u.userId}>
-                    {u.name} ({u.subtitle})
+            {canAssign && (
+              <div className="space-y-2">
+                <label htmlFor="taskAssigneeSelect" className="text-sm font-medium">
+                  Assignee (Optional)
+                </label>
+                <select
+                  id="taskAssigneeSelect"
+                  value={assignedToId}
+                  onChange={(e) => setAssignedToId(e.target.value ? Number(e.target.value) : "")}
+                  className="w-full bg-background border border-input rounded-md px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  disabled={
+                    createTaskMutation.isPending ||
+                    isAssigneesLoading ||
+                    !!assigneeLoadError ||
+                    eligibleAssignees.length === 0
+                  }
+                >
+                  <option value="">
+                    {isAssigneesLoading ? "Loading eligible members…" : "-- Unassigned (Backlog) --"}
                   </option>
-                ))}
-              </select>
-            </div>
+                  {eligibleAssignees.map((u) => (
+                    <option key={u.userId} value={u.userId}>
+                      {u.name} ({u.subtitle})
+                    </option>
+                  ))}
+                </select>
+                {assigneeLoadError ? (
+                  <p role="alert" className="text-xs text-destructive">
+                    {assigneeLoadError}
+                  </p>
+                ) : !isAssigneesLoading && eligibleAssignees.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    {assigneeEmptyMessage}
+                  </p>
+                ) : null}
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -293,6 +437,7 @@ export function CreateTaskModal({
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
                 required
+                disabled={createTaskMutation.isPending}
               />
             </div>
             <div className="space-y-2">
@@ -305,6 +450,7 @@ export function CreateTaskModal({
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
                 required
+                disabled={createTaskMutation.isPending}
               />
             </div>
           </div>
